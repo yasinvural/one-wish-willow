@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { hashVisitorId, VISITOR_COOKIE_NAME } from "@/lib/visitor-identity";
-import { prisma } from "@/lib/prisma";
+import { VISITOR_COOKIE_NAME } from "@/lib/visitor-identity";
+import { getPersonalWish } from "@/lib/wish-queries";
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -11,18 +11,7 @@ export async function GET() {
     return NextResponse.json({ wish: null }, { headers: { "Cache-Control": "no-store" } });
   }
 
-  const wish = await prisma.wish.findUnique({
-    where: { anonymousVisitorHash: hashVisitorId(visitorId) },
-    select: {
-      id: true,
-      text: true,
-      isHidden: true,
-      x: true,
-      y: true,
-      clusterCell: true,
-      createdAt: true,
-    },
-  });
+  const wish = await getPersonalWish(visitorId);
 
   return NextResponse.json({ wish }, { headers: { "Cache-Control": "no-store" } });
 }
