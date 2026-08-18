@@ -26,6 +26,13 @@ export type PublicWishesResponse =
   | { type: "wishes"; wishes: PublicWish[] }
   | { type: "clusters"; clusters: Array<{ cell: string; count: number; x: number; y: number }> };
 
+export type PublicWishCluster = {
+  cell: string;
+  count: number;
+  x: number;
+  y: number;
+};
+
 function serializeWish<T extends { createdAt: Date }>(wish: T): Omit<T, "createdAt"> & { createdAt: string } {
   const { createdAt, ...wishData } = wish;
 
@@ -95,4 +102,38 @@ export async function getPublicWishes(viewport: Viewport): Promise<PublicWishesR
       }))
       .sort((left, right) => left.cell.localeCompare(right.cell)),
   };
+}
+
+export async function getRecentPublicWishes(limit = 12): Promise<PublicWish[]> {
+  const wishes = await prisma.wish.findMany({
+    where: { isHidden: false },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: {
+      id: true,
+      text: true,
+      x: true,
+      y: true,
+      clusterCell: true,
+      createdAt: true,
+    },
+  });
+
+  return wishes.map(serializeWish);
+}
+
+export async function getPublicWishClusters(): Promise<PublicWishCluster[]> {
+  const clusters = await prisma.wish.groupBy({
+    by: ["clusterCell"],
+    where: { isHidden: false },
+    _count: { _all: true },
+  });
+
+  return clusters
+    .map(({ clusterCell, _count }) => ({
+      cell: clusterCell,
+      count: _count._all,
+      ...getClusterCellCenter(clusterCell),
+    }))
+    .sort((left, right) => left.cell.localeCompare(right.cell));
 }

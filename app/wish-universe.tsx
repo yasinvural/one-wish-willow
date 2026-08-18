@@ -1,6 +1,6 @@
 "use client";
 
-import { Crosshair, Minus, Plus, Sparkles } from "lucide-react";
+import { Clock3, Crosshair, Minus, Plus, Sparkles } from "lucide-react";
 import {
   type ReactZoomPanPinchContentRef,
   TransformComponent,
@@ -8,14 +8,19 @@ import {
 } from "react-zoom-pan-pinch";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NeuralWillowBackground } from "@/app/neural-willow-background";
+import { WishComposer } from "@/app/wish-composer";
 import type { Camera } from "@/lib/initial-viewport";
-import type { PersonalWish, PublicWish, PublicWishesResponse } from "@/lib/wish-queries";
+import type { PersonalWish, PublicWish, PublicWishCluster, PublicWishesResponse } from "@/lib/wish-queries";
 import {
   CANVAS_SIZE,
   getCameraFromTransform,
   getInitialZoom,
+  getMinimapPointFromWorldPoint,
+  getMinimapViewportRect,
   getTransformForCamera,
   getViewportFromTransform,
+  getWorldPointFromMinimapPoint,
+  getZoomedScale,
   MAX_ZOOM,
   MIN_ZOOM,
   type CanvasSize,
@@ -27,10 +32,95 @@ type WishUniverseProps = {
   camera: Camera;
   personalWish: PersonalWish | null;
   publicWishes: PublicWishesResponse | null;
+  recentWishes: PublicWish[];
   error: string | null;
 };
 
 const FETCH_DEBOUNCE_MS = 250;
+const DISCOVERY_ZOOM = 1;
+const MINIMAP_SIZE = 176;
+const minimapSize = { width: MINIMAP_SIZE, height: MINIMAP_SIZE };
+
+function Minimap({
+  clusters,
+  canvasSize,
+  transform,
+  selectedWish,
+  onNavigate,
+}: {
+  clusters: PublicWishCluster[];
+  canvasSize: CanvasSize | null;
+  transform: TransformState;
+  selectedWish: PublicWish | null;
+  onNavigate: (camera: Camera) => void;
+}) {
+  const viewport = canvasSize ? getMinimapViewportRect(transform, canvasSize, minimapSize) : null;
+  const selectedWishPoint = selectedWish
+    ? getMinimapPointFromWorldPoint({ x: selectedWish.x, y: selectedWish.y }, minimapSize)
+    : null;
+
+  return (
+    <button
+      type="button"
+      aria-label="World minimap. Click to move the camera."
+      className="canvas-control absolute right-5 bottom-5 z-20 overflow-hidden rounded-2xl border border-white/15 bg-slate-950/85 p-2 shadow-2xl backdrop-blur-md sm:right-7 sm:bottom-7"
+      style={{ width: MINIMAP_SIZE + 16, height: MINIMAP_SIZE + 16 }}
+      onClick={(event) => {
+        const bounds = event.currentTarget.getBoundingClientRect();
+        onNavigate(
+          getWorldPointFromMinimapPoint(
+            { width: event.clientX - bounds.left - 8, height: event.clientY - bounds.top - 8 },
+            minimapSize,
+          ),
+        );
+      }}
+    >
+      <span className="pointer-events-none absolute top-2 left-3 z-10 text-[9px] font-semibold tracking-[0.14em] text-emerald-100/80 uppercase">
+        World map
+      </span>
+      <span className="pointer-events-none absolute inset-2 overflow-hidden rounded-xl bg-slate-900/80">
+        {clusters.map((cluster) => {
+          const point = getMinimapPointFromWorldPoint(cluster, minimapSize);
+          const dotSize = Math.min(10, 3 + Math.log2(cluster.count + 1) * 1.5);
+
+          return (
+            <span
+              key={cluster.cell}
+              className="absolute rounded-full bg-emerald-300/60"
+              style={{
+                left: point.x,
+                top: point.y,
+                width: dotSize,
+                height: dotSize,
+                transform: "translate(-50%, -50%)",
+              }}
+            />
+          );
+        })}
+
+        {viewport && (
+          <span
+            className="absolute border border-emerald-100 bg-emerald-200/10"
+            style={{
+              left: viewport.x,
+              top: viewport.y,
+              width: Math.max(viewport.width, 2),
+              height: Math.max(viewport.height, 2),
+            }}
+          />
+        )}
+
+        {selectedWishPoint && (
+          <span
+            aria-hidden="true"
+            className="absolute size-2 rounded-full bg-amber-300 ring-2 ring-amber-100/80"
+            style={{ left: selectedWishPoint.x, top: selectedWishPoint.y, transform: "translate(-50%, -50%)" }}
+          />
+        )}
+      </span>
+    </button>
+  );
+}
 
 function InfiniteCanvasSurface({ transform }: { transform: TransformState }) {
   const gridSize = Math.max(2, 28 * transform.scale);
@@ -62,7 +152,15 @@ function relativeTime(createdAt: string) {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-function WishCard({ wish, selected, onSelect }: { wish: PublicWish; selected: boolean; onSelect: () => void }) {
+function WishCard({
+  wish,
+  selected,
+  onSelect,
+}: {
+  wish: PublicWish;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   return (
     <button
       type="button"
@@ -88,20 +186,26 @@ function ClusterNode({
   count,
   x,
   y,
+  selected,
   onClick,
 }: {
   cell: string;
   count: number;
   x: number;
   y: number;
+  selected: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
-      aria-label={`Explore ${count} wishes in cluster ${cell}`}
+      aria-label={`${selected ? "Selected " : ""}Explore ${count} wishes in cluster ${cell}`}
       onClick={onClick}
-      className="wish-node absolute flex size-20 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border border-emerald-200/40 bg-emerald-300/10 text-emerald-100 shadow-[0_0_48px_rgba(110,231,183,0.3)] backdrop-blur transition hover:scale-110 hover:bg-emerald-200/20"
+      className={`wish-node absolute flex size-20 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border text-emerald-100 shadow-[0_0_48px_rgba(110,231,183,0.3)] backdrop-blur transition hover:scale-110 hover:bg-emerald-200/20 ${
+        selected
+          ? "border-emerald-100 bg-emerald-200/30 ring-4 ring-emerald-300/50"
+          : "border-emerald-200/40 bg-emerald-300/10"
+      }`}
       style={{ left: x * WORLD_TO_CANVAS, top: y * WORLD_TO_CANVAS }}
     >
       <span className="text-lg font-semibold tabular-nums">{count}</span>
@@ -110,7 +214,13 @@ function ClusterNode({
   );
 }
 
-export function WishUniverse({ camera: initialCamera, personalWish, publicWishes: initialWishes, error: initialError }: WishUniverseProps) {
+export function WishUniverse({
+  camera: initialCamera,
+  personalWish: initialPersonalWish,
+  publicWishes: initialWishes,
+  recentWishes,
+  error: initialError,
+}: WishUniverseProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const transformRef = useRef<ReactZoomPanPinchContentRef | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -121,11 +231,15 @@ export function WishUniverse({ camera: initialCamera, personalWish, publicWishes
   const canvasSizeRef = useRef<CanvasSize | null>(null);
 
   const [camera, setCamera] = useState(initialCamera);
+  const [personalWish, setPersonalWish] = useState(initialPersonalWish);
   const [publicWishes, setPublicWishes] = useState<PublicWishesResponse | null>(initialWishes);
-  const [selectedWishId, setSelectedWishId] = useState<string | null>(null);
+  const [selectedWish, setSelectedWish] = useState<PublicWish | null>(null);
+  const [isRecentOpen, setIsRecentOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(initialError);
   const [currentScale, setCurrentScale] = useState(MIN_ZOOM);
+  const [canvasSize, setCanvasSize] = useState<CanvasSize | null>(null);
+  const [minimapClusters, setMinimapClusters] = useState<PublicWishCluster[]>([]);
   const [worldTransform, setWorldTransform] = useState<TransformState>({
     positionX: 0,
     positionY: 0,
@@ -212,6 +326,7 @@ export function WishUniverse({ camera: initialCamera, personalWish, publicWishes
       if (!size.width || !size.height) return;
 
       canvasSizeRef.current = size;
+      setCanvasSize(size);
 
       if (!initializedRef.current && transformRef.current) {
         const scale = getInitialZoom(size);
@@ -242,6 +357,24 @@ export function WishUniverse({ camera: initialCamera, personalWish, publicWishes
     [],
   );
 
+  useEffect(() => {
+    const controller = new AbortController();
+
+    void fetch("/api/wishes/minimap", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Unable to load minimap data.");
+        return (await response.json()) as PublicWishCluster[];
+      })
+      .then(setMinimapClusters)
+      .catch((requestError) => {
+        if (!(requestError instanceof DOMException && requestError.name === "AbortError")) {
+          setError("The Willow could not reveal the world map. Please try again.");
+        }
+      });
+
+    return () => controller.abort();
+  }, []);
+
   const handleTransform = useCallback(
     (_ref: unknown, nextTransform: TransformState) => {
       const canvasSize = canvasSizeRef.current;
@@ -262,6 +395,37 @@ export function WishUniverse({ camera: initialCamera, personalWish, publicWishes
       ? publicWishes.wishes.length
       : publicWishes?.clusters.reduce((total, cluster) => total + cluster.count, 0);
 
+  const handleWishCreated = useCallback(
+    (wish: PersonalWish) => {
+      setPersonalWish(wish);
+      setSelectedWish(wish);
+      setError(null);
+      moveCamera({ x: wish.x, y: wish.y }, Math.max(currentScale, 1));
+    },
+    [currentScale, moveCamera],
+  );
+
+  const focusWish = useCallback(
+    (wish: PublicWish) => {
+      setSelectedWish(wish);
+      moveCamera({ x: wish.x, y: wish.y }, Math.max(currentScale, DISCOVERY_ZOOM));
+    },
+    [currentScale, moveCamera],
+  );
+
+  const zoomAroundFocus = useCallback(
+    (direction: -1 | 1) => {
+      const focus = selectedWish ? { x: selectedWish.x, y: selectedWish.y } : camera;
+      moveCamera(focus, getZoomedScale(currentScale, direction), 250);
+    },
+    [camera, currentScale, moveCamera, selectedWish],
+  );
+
+  const selectedWishIsLoaded =
+    publicWishes?.type === "wishes" && publicWishes.wishes.some((wish) => wish.id === selectedWish?.id);
+  const shouldRenderSelectedWish =
+    selectedWish !== null && !selectedWishIsLoaded && !(personalWish?.id === selectedWish.id && personalWish.isHidden);
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#060912] text-stone-100">
       <NeuralWillowBackground />
@@ -274,7 +438,9 @@ export function WishUniverse({ camera: initialCamera, personalWish, publicWishes
           maxScale={MAX_ZOOM}
           limitToBounds
           centerOnInit={false}
-          wheel={{ step: 0.12 }}
+          smooth={false}
+          wheel={{ step: 0.08 }}
+          doubleClick={{ disabled: true }}
           panning={{ velocityDisabled: true, excluded: ["wish-node", "canvas-control"] }}
           onTransform={handleTransform}
         >
@@ -288,17 +454,31 @@ export function WishUniverse({ camera: initialCamera, personalWish, publicWishes
                   <WishCard
                     key={wish.id}
                     wish={wish}
-                    selected={selectedWishId === wish.id}
-                    onSelect={() => setSelectedWishId(wish.id)}
+                    selected={selectedWish?.id === wish.id}
+                    onSelect={() => setSelectedWish(wish)}
                   />
                 ))}
+
+              {shouldRenderSelectedWish && selectedWish && (
+                <WishCard
+                  wish={selectedWish}
+                  selected
+                  onSelect={() => setSelectedWish(selectedWish)}
+                />
+              )}
 
               {publicWishes?.type === "clusters" &&
                 publicWishes.clusters.map((cluster) => (
                   <ClusterNode
                     key={cluster.cell}
                     {...cluster}
-                    onClick={() => moveCamera({ x: cluster.x, y: cluster.y }, Math.min(currentScale * 1.8, MAX_ZOOM))}
+                    selected={selectedWish?.clusterCell === cluster.cell}
+                    onClick={() =>
+                      moveCamera(
+                        { x: cluster.x, y: cluster.y },
+                        Math.min(Math.max(currentScale, DISCOVERY_ZOOM), MAX_ZOOM),
+                      )
+                    }
                   />
                 ))}
             </div>
@@ -314,24 +494,62 @@ export function WishUniverse({ camera: initialCamera, personalWish, publicWishes
           </p>
         </div>
 
-        {personalWish && (
-          <button
-            type="button"
-            className="canvas-control pointer-events-auto inline-flex items-center gap-2 rounded-xl border border-emerald-200/25 bg-emerald-300/10 px-3 py-2 text-sm font-medium text-emerald-50 shadow-xl backdrop-blur transition hover:bg-emerald-200/20"
-            onClick={() => moveCamera({ x: personalWish.x, y: personalWish.y }, Math.max(currentScale, 1))}
-          >
-            <Crosshair className="size-4" aria-hidden="true" />
-            Find my wish
-          </button>
-        )}
+        <div className="pointer-events-auto flex items-center gap-2">
+          {recentWishes.length > 0 && (
+            <button
+              type="button"
+              aria-expanded={isRecentOpen}
+              className="canvas-control inline-flex items-center gap-2 rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm font-medium text-stone-100 shadow-xl backdrop-blur transition hover:bg-slate-800"
+              onClick={() => setIsRecentOpen((isOpen) => !isOpen)}
+            >
+              <Clock3 className="size-4" aria-hidden="true" />
+              Recent
+            </button>
+          )}
+
+          {personalWish ? (
+            <button
+              type="button"
+              className="canvas-control inline-flex items-center gap-2 rounded-xl border border-emerald-200/25 bg-emerald-300/10 px-3 py-2 text-sm font-medium text-emerald-50 shadow-xl backdrop-blur transition hover:bg-emerald-200/20"
+              onClick={() => focusWish(personalWish)}
+            >
+              <Crosshair className="size-4" aria-hidden="true" />
+              Find my wish
+            </button>
+          ) : (
+            <WishComposer onWishCreated={handleWishCreated} />
+          )}
+        </div>
       </header>
+
+      {isRecentOpen && (
+        <section className="absolute top-24 right-5 z-20 w-[min(22rem,calc(100vw-2.5rem))] rounded-2xl border border-white/10 bg-slate-950/85 p-3 shadow-2xl backdrop-blur-md sm:top-28 sm:right-7">
+          <p className="px-2 pt-1 pb-2 text-xs font-semibold tracking-[0.18em] text-emerald-300 uppercase">Recent wishes</p>
+          <div className="max-h-72 space-y-1 overflow-y-auto">
+            {recentWishes.map((wish) => (
+              <button
+                key={wish.id}
+                type="button"
+                className="canvas-control w-full rounded-xl px-3 py-2 text-left transition hover:bg-white/[0.08]"
+                onClick={() => {
+                  setIsRecentOpen(false);
+                  focusWish(wish);
+                }}
+              >
+                <span className="line-clamp-2 block text-sm leading-5 text-stone-100">{wish.text}</span>
+                <span className="mt-1 block text-xs text-stone-500">{relativeTime(wish.createdAt)}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="absolute bottom-5 left-5 z-20 flex gap-2 sm:bottom-7 sm:left-7">
         <button
           type="button"
           aria-label="Zoom out"
           className="canvas-control grid size-11 place-items-center rounded-xl border border-white/10 bg-slate-950/70 text-stone-100 shadow-xl backdrop-blur transition hover:bg-slate-800"
-          onClick={() => transformRef.current?.zoomOut(250)}
+          onClick={() => zoomAroundFocus(-1)}
         >
           <Minus className="size-4" aria-hidden="true" />
         </button>
@@ -339,11 +557,19 @@ export function WishUniverse({ camera: initialCamera, personalWish, publicWishes
           type="button"
           aria-label="Zoom in"
           className="canvas-control grid size-11 place-items-center rounded-xl border border-white/10 bg-slate-950/70 text-stone-100 shadow-xl backdrop-blur transition hover:bg-slate-800"
-          onClick={() => transformRef.current?.zoomIn(250)}
+          onClick={() => zoomAroundFocus(1)}
         >
           <Plus className="size-4" aria-hidden="true" />
         </button>
       </div>
+
+      <Minimap
+        clusters={minimapClusters}
+        canvasSize={canvasSize}
+        transform={worldTransform}
+        selectedWish={selectedWish}
+        onNavigate={(nextCamera) => moveCamera(nextCamera, currentScale)}
+      />
 
       {error && (
         <p className="absolute right-5 bottom-5 z-20 max-w-xs rounded-xl border border-rose-300/20 bg-rose-950/60 px-4 py-3 text-sm text-rose-100 shadow-xl backdrop-blur sm:right-7 sm:bottom-7">

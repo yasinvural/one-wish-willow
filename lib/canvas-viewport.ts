@@ -7,6 +7,7 @@ export const CANVAS_SIZE = 16_384;
 export const WORLD_TO_CANVAS = CANVAS_SIZE / WORLD_SIZE;
 export const MIN_ZOOM = 0.16;
 export const MAX_ZOOM = 4;
+export const ZOOM_STEP = 0.12;
 
 export type CanvasSize = {
   width: number;
@@ -17,6 +18,11 @@ export type TransformState = {
   positionX: number;
   positionY: number;
   scale: number;
+};
+
+export type MinimapSize = {
+  width: number;
+  height: number;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -31,11 +37,46 @@ export function getInitialZoom(size: CanvasSize) {
   );
 }
 
+export function getZoomedScale(scale: number, direction: -1 | 1) {
+  return clamp(scale + direction * ZOOM_STEP, MIN_ZOOM, MAX_ZOOM);
+}
+
 export function getTransformForCamera(camera: Camera, size: CanvasSize, scale: number): TransformState {
   return {
     positionX: size.width / 2 - camera.x * WORLD_TO_CANVAS * scale,
     positionY: size.height / 2 - camera.y * WORLD_TO_CANVAS * scale,
     scale,
+  };
+}
+
+export function getMinimapPointFromWorldPoint(point: Camera, size: MinimapSize) {
+  return {
+    x: (point.x / WORLD_SIZE) * size.width,
+    y: (point.y / WORLD_SIZE) * size.height,
+  };
+}
+
+export function getWorldPointFromMinimapPoint(point: MinimapSize, size: MinimapSize): Camera {
+  return {
+    x: Math.round(clamp((point.width / size.width) * WORLD_SIZE, 0, WORLD_SIZE)),
+    y: Math.round(clamp((point.height / size.height) * WORLD_SIZE, 0, WORLD_SIZE)),
+  };
+}
+
+export function getMinimapViewportRect(
+  transform: TransformState,
+  canvasSize: CanvasSize,
+  minimapSize: MinimapSize,
+) {
+  const viewport = getViewportFromTransform(transform, canvasSize);
+  const topLeft = getMinimapPointFromWorldPoint({ x: viewport.minX, y: viewport.minY }, minimapSize);
+  const bottomRight = getMinimapPointFromWorldPoint({ x: viewport.maxX, y: viewport.maxY }, minimapSize);
+
+  return {
+    x: topLeft.x,
+    y: topLeft.y,
+    width: bottomRight.x - topLeft.x,
+    height: bottomRight.y - topLeft.y,
   };
 }
 
