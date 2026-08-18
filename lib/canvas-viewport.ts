@@ -25,6 +25,11 @@ export type MinimapSize = {
   height: number;
 };
 
+export type PointerDelta = {
+  x: number;
+  y: number;
+};
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -46,6 +51,24 @@ export function getTransformForCamera(camera: Camera, size: CanvasSize, scale: n
     positionX: size.width / 2 - camera.x * WORLD_TO_CANVAS * scale,
     positionY: size.height / 2 - camera.y * WORLD_TO_CANVAS * scale,
     scale,
+  };
+}
+
+export function getPannedTransform(
+  transform: TransformState,
+  delta: PointerDelta,
+  size: CanvasSize,
+): TransformState {
+  const scaledCanvasSize = CANVAS_SIZE * transform.scale;
+  const minPositionX = Math.min(0, size.width - scaledCanvasSize);
+  const maxPositionX = Math.max(0, size.width - scaledCanvasSize);
+  const minPositionY = Math.min(0, size.height - scaledCanvasSize);
+  const maxPositionY = Math.max(0, size.height - scaledCanvasSize);
+
+  return {
+    scale: transform.scale,
+    positionX: clamp(transform.positionX + delta.x, minPositionX, maxPositionX),
+    positionY: clamp(transform.positionY + delta.y, minPositionY, maxPositionY),
   };
 }
 

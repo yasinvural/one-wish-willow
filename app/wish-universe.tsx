@@ -17,6 +17,7 @@ import {
   getInitialZoom,
   getMinimapPointFromWorldPoint,
   getMinimapViewportRect,
+  getPannedTransform,
   getTransformForCamera,
   getViewportFromTransform,
   getWorldPointFromMinimapPoint,
@@ -34,6 +35,13 @@ type WishUniverseProps = {
   publicWishes: PublicWishesResponse | null;
   recentWishes: PublicWish[];
   error: string | null;
+};
+
+type PanGesture = {
+  pointerId: number;
+  clientX: number;
+  clientY: number;
+  transform: TransformState;
 };
 
 const FETCH_DEBOUNCE_MS = 250;
@@ -229,6 +237,7 @@ export function WishUniverse({
   const initializedRef = useRef(false);
   const suppressFetchRef = useRef(false);
   const canvasSizeRef = useRef<CanvasSize | null>(null);
+  const panGestureRef = useRef<PanGesture | null>(null);
 
   const [camera, setCamera] = useState(initialCamera);
   const [personalWish, setPersonalWish] = useState(initialPersonalWish);
@@ -316,6 +325,69 @@ export function WishUniverse({
       animationTime,
     );
   }, []);
+
+  const startPan = useCallback((event: globalThis.PointerEvent) => {
+    if ((event.pointerType === "mouse" && event.button !== 0) || !(event.target instanceof Element)) return;
+    const container = containerRef.current;
+    const transform = transformRef.current?.instance.state;
+    if (!container?.contains(event.target)) return;
+    if (event.target.closest(".wish-node, .canvas-control")) return;
+    if (!transform) return;
+
+    if (panGestureRef.current) {
+      panGestureRef.current = null;
+      return;
+    }
+
+    panGestureRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      transform,
+    };
+    event.preventDefault();
+  }, []);
+
+  const continuePan = useCallback((event: globalThis.PointerEvent) => {
+    const panGesture = panGestureRef.current;
+    const canvasSize = canvasSizeRef.current;
+    const transform = transformRef.current;
+    if (!panGesture || panGesture.pointerId !== event.pointerId || !canvasSize || !transform) return;
+
+    const nextTransform = getPannedTransform(
+      panGesture.transform,
+      { x: event.clientX - panGesture.clientX, y: event.clientY - panGesture.clientY },
+      canvasSize,
+    );
+    panGestureRef.current = {
+      ...panGesture,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      transform: nextTransform,
+    };
+    transform.setTransform(nextTransform.positionX, nextTransform.positionY, nextTransform.scale, 0);
+    event.preventDefault();
+  }, []);
+
+  const endPan = useCallback((event: globalThis.PointerEvent) => {
+    if (panGestureRef.current?.pointerId === event.pointerId) {
+      panGestureRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener("pointerdown", startPan);
+    window.addEventListener("pointermove", continuePan);
+    window.addEventListener("pointerup", endPan);
+    window.addEventListener("pointercancel", endPan);
+
+    return () => {
+      window.removeEventListener("pointerdown", startPan);
+      window.removeEventListener("pointermove", continuePan);
+      window.removeEventListener("pointerup", endPan);
+      window.removeEventListener("pointercancel", endPan);
+    };
+  }, [continuePan, endPan, startPan]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -431,7 +503,10 @@ export function WishUniverse({
       <NeuralWillowBackground />
       <InfiniteCanvasSurface transform={worldTransform} />
 
-      <div ref={containerRef} className="absolute inset-0 z-10">
+      <div
+        ref={containerRef}
+        className="canvas-surface absolute inset-0 z-10 touch-none"
+      >
         <TransformWrapper
           ref={transformRef}
           minScale={MIN_ZOOM}
@@ -441,7 +516,13 @@ export function WishUniverse({
           smooth={false}
           wheel={{ step: 0.08 }}
           doubleClick={{ disabled: true }}
-          panning={{ velocityDisabled: true, excluded: ["wish-node", "canvas-control"] }}
+          panning={{
+            disabled: true,
+            excluded: ["canvas-surface", "wish-node", "canvas-control"],
+            allowLeftClickPan: false,
+            allowMiddleClickPan: false,
+            allowRightClickPan: false,
+          }}
           onTransform={handleTransform}
         >
           <TransformComponent wrapperClass="!h-full !w-full" contentClass="!h-auto !w-auto">
