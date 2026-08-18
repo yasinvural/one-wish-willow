@@ -6,7 +6,7 @@ import {
   TransformComponent,
   TransformWrapper,
 } from "react-zoom-pan-pinch";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef, useState } from "react";
 import { NeuralWillowBackground } from "@/app/neural-willow-background";
 import { WishComposer } from "@/app/wish-composer";
 import type { Camera } from "@/lib/initial-viewport";
@@ -326,19 +326,21 @@ export function WishUniverse({
     );
   }, []);
 
-  const startPan = useCallback((event: globalThis.PointerEvent) => {
+  const startPan = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if ((event.pointerType === "mouse" && event.button !== 0) || !(event.target instanceof Element)) return;
-    const container = containerRef.current;
     const transform = transformRef.current?.instance.state;
-    if (!container?.contains(event.target)) return;
     if (event.target.closest(".wish-node, .canvas-control")) return;
     if (!transform) return;
 
     if (panGestureRef.current) {
+      if (event.currentTarget.hasPointerCapture(panGestureRef.current.pointerId)) {
+        event.currentTarget.releasePointerCapture(panGestureRef.current.pointerId);
+      }
       panGestureRef.current = null;
       return;
     }
 
+    event.currentTarget.setPointerCapture(event.pointerId);
     panGestureRef.current = {
       pointerId: event.pointerId,
       clientX: event.clientX,
@@ -348,7 +350,7 @@ export function WishUniverse({
     event.preventDefault();
   }, []);
 
-  const continuePan = useCallback((event: globalThis.PointerEvent) => {
+  const continuePan = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const panGesture = panGestureRef.current;
     const canvasSize = canvasSizeRef.current;
     const transform = transformRef.current;
@@ -369,25 +371,11 @@ export function WishUniverse({
     event.preventDefault();
   }, []);
 
-  const endPan = useCallback((event: globalThis.PointerEvent) => {
+  const endPan = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (panGestureRef.current?.pointerId === event.pointerId) {
       panGestureRef.current = null;
     }
   }, []);
-
-  useEffect(() => {
-    window.addEventListener("pointerdown", startPan);
-    window.addEventListener("pointermove", continuePan);
-    window.addEventListener("pointerup", endPan);
-    window.addEventListener("pointercancel", endPan);
-
-    return () => {
-      window.removeEventListener("pointerdown", startPan);
-      window.removeEventListener("pointermove", continuePan);
-      window.removeEventListener("pointerup", endPan);
-      window.removeEventListener("pointercancel", endPan);
-    };
-  }, [continuePan, endPan, startPan]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -505,7 +493,11 @@ export function WishUniverse({
 
       <div
         ref={containerRef}
-        className="canvas-surface absolute inset-0 z-10 touch-none"
+        className="absolute inset-0 z-10 touch-none"
+        onPointerDown={startPan}
+        onPointerMove={continuePan}
+        onPointerUp={endPan}
+        onPointerCancel={endPan}
       >
         <TransformWrapper
           ref={transformRef}
@@ -518,7 +510,6 @@ export function WishUniverse({
           doubleClick={{ disabled: true }}
           panning={{
             disabled: true,
-            excluded: ["canvas-surface", "wish-node", "canvas-control"],
             allowLeftClickPan: false,
             allowMiddleClickPan: false,
             allowRightClickPan: false,
