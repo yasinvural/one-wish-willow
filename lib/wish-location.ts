@@ -1,8 +1,6 @@
 import { randomInt } from "node:crypto";
 import { CLUSTER_CELL_SIZE, WORLD_SIZE } from "@/lib/world";
 
-export { CLUSTER_CELL_SIZE, WORLD_SIZE } from "@/lib/world";
-
 export function getClusterCell(x: number, y: number) {
   return `${Math.floor(x / CLUSTER_CELL_SIZE)}:${Math.floor(y / CLUSTER_CELL_SIZE)}`;
 }
